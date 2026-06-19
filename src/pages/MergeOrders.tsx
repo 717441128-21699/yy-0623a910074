@@ -20,6 +20,7 @@ export default function MergeOrders() {
     createMergedOrder,
     setSelectedMaterialForCompare,
     getStoreById,
+    getSupplierById,
     getDemandsByMaterial,
     removeMergedOrder,
   } = useProcurementStore();
@@ -29,7 +30,14 @@ export default function MergeOrders() {
   const [viewMode, setViewMode] = useState<"unmerged" | "merged">("unmerged");
 
   const submittedDemands = useMemo(
-    () => demands.filter((d) => d.week === currentWeek && d.status !== "draft"),
+    () =>
+      demands.filter(
+        (d) =>
+          d.week === currentWeek &&
+          d.status !== "draft" &&
+          d.reason &&
+          d.reason.trim().length > 0
+      ),
     [demands, currentWeek]
   );
 
@@ -235,6 +243,7 @@ export default function MergeOrders() {
                   <th className="table-th">总数量</th>
                   <th className="table-th">门店数</th>
                   <th className="table-th">供应商</th>
+                  <th className="table-th">预估金额</th>
                   <th className="table-th">决策</th>
                   <th className="table-th">预计到货</th>
                   <th className="table-th w-16 rounded-r-lg">操作</th>
@@ -243,8 +252,8 @@ export default function MergeOrders() {
               <tbody>
                 {mergedGroups.map(({ order, material, demands: mDemands }) => {
                   const supplier = order.supplierId
-                    ? getStoreById(order.supplierId) ?? { name: "未选" }
-                    : { name: "未选择" };
+                    ? getSupplierById(order.supplierId)
+                    : null;
                   const d = daysFromNow(order.expectedArrival);
                   return (
                     <tr key={order.id} className="hover:bg-slate-50/60">
@@ -261,8 +270,31 @@ export default function MergeOrders() {
                           {new Set(mDemands.map((x) => x.storeId)).size} 家
                         </span>
                       </td>
-                      <td className="table-td text-sm text-slate-700">
-                        {(supplier as { name: string }).name}
+                      <td className="table-td text-sm">
+                        {supplier ? (
+                          <div>
+                            <div className="font-medium text-slate-800">{supplier.name}</div>
+                            <div className="text-[11px] text-slate-500">
+                              履约{supplier.totalOrders}单 · 评分{supplier.rating}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 italic text-xs">未选择，点击比价</span>
+                        )}
+                      </td>
+                      <td className="table-td">
+                        {order.finalPrice ? (
+                          <div>
+                            <div className="font-bold text-brand-700">
+                              ¥{order.finalPrice.toLocaleString()}
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              含MOQ与配送
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 text-xs italic">待比价</span>
+                        )}
                       </td>
                       <td className="table-td"><DecisionBadge decision={order.decision} /></td>
                       <td className="table-td">

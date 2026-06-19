@@ -13,7 +13,7 @@ import {
   Clock,
 } from "lucide-react";
 import { useProcurementStore } from "@/store/useProcurementStore";
-import { StatusBadge, UrgencyBadge } from "@/components/common/Badge";
+import { StatusBadge, UrgencyBadge, DecisionBadge } from "@/components/common/Badge";
 import Timeline from "@/components/common/Timeline";
 import { formatDateShort, daysFromNow, getWeekLabel } from "@/utils/date";
 
@@ -37,7 +37,9 @@ export default function Feedback() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const weekDemands = useMemo(() => {
-    let list = demands.filter((d) => d.week === currentWeek);
+    let list = demands.filter(
+      (d) => d.week === currentWeek && d.reason && d.reason.trim().length > 0
+    );
     if (selectedStoreId !== "all") {
       list = list.filter((d) => d.storeId === selectedStoreId);
     }
@@ -379,6 +381,14 @@ export default function Feedback() {
                     </div>
                     <div className="col-span-4 md:col-span-2 flex items-center gap-2 flex-wrap">
                       <StatusBadge status={d.status} />
+                      {d.decision && d.decision !== "pending" && (
+                        <DecisionBadge decision={d.decision} />
+                      )}
+                      {d.decision === "hold" && (
+                        <span className="text-[10px] badge bg-slate-200 text-slate-600 ml-1">
+                          采购暂缓
+                        </span>
+                      )}
                     </div>
                     <div className="col-span-4 md:col-span-2 text-right md:text-left">
                       {d.expectedArrival ? (
@@ -435,7 +445,7 @@ export default function Feedback() {
                             </div>
                           </div>
                         </div>
-                        <Timeline status={d.status} expectedArrival={d.expectedArrival} />
+                        <Timeline status={d.status} expectedArrival={d.expectedArrival} decision={d.decision} />
                       </div>
                     </div>
                   )}

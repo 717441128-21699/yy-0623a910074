@@ -11,6 +11,7 @@ import {
   Package,
   AlertCircle,
   Info,
+  AlertTriangle,
 } from "lucide-react";
 import { useProcurementStore } from "@/store/useProcurementStore";
 import { UrgencyBadge } from "@/components/common/Badge";
@@ -52,6 +53,8 @@ export default function SubmitDemand() {
   const [showTemplates, setShowTemplates] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string>("全部分类");
   const [materialSearch, setMaterialSearch] = useState("");
+  const [errorIds, setErrorIds] = useState<string[]>([]);
+  const [toastMsg, setToastMsg] = useState<string>("");
 
   const filteredMaterials = MATERIALS.filter((m) => {
     const catOk = selectedCategory === "全部分类" || m.category === selectedCategory;
@@ -66,6 +69,9 @@ export default function SubmitDemand() {
   const urgentCount = storeDemands.filter(
     (d) => d.urgency === "urgent" || d.urgency === "critical"
   ).length;
+  const emptyReasonCount = drafts.filter(
+    (d) => !d.reason || d.reason.trim().length === 0
+  ).length;
 
   function handleAddFromTemplate(tpl: (typeof QUICK_TEMPLATES)[number]) {
     if (!currentStoreId) return;
@@ -74,7 +80,7 @@ export default function SubmitDemand() {
       updateDemand(exist.id, {
         quantity: exist.quantity + tpl.quantity,
         urgency: tpl.urgency,
-        reason: tpl.reason,
+        reason: exist.reason && exist.reason.trim() ? exist.reason : tpl.reason,
       });
     } else {
       addDemand({
@@ -85,12 +91,21 @@ export default function SubmitDemand() {
         reason: tpl.reason,
       });
     }
+    setErrorIds((prev) => prev.filter((id) => id !== (exist?.id ?? "")));
   }
 
   function handleAddCustom(materialId: string) {
     if (!currentStoreId) return;
     const exist = drafts.find((d) => d.materialId === materialId);
     if (exist) return;
+    const newDemand: Omit<typeof exist, never> = {
+      id: "",
+      storeId: currentStoreId,
+      materialId,
+      quantity: 1,
+      urgency: "normal",
+      reason: "",
+    } as any;
     addDemand({
       storeId: currentStoreId,
       materialId,
@@ -98,6 +113,29 @@ export default function SubmitDemand() {
       urgency: "normal",
       reason: "",
     });
+    setToastMsg("已添加到草稿，请填写申请理由后提交");
+    setTimeout(() => setToastMsg(""), 2500);
+  }
+
+  function handleSubmitAll() {
+    if (!currentStoreId) return;
+    const invalid = drafts.filter((d) => !d.reason || d.reason.trim().length === 0);
+    if (invalid.length > 0) {
+      setErrorIds(invalid.map((d) => d.id));
+      setToastMsg(`有 ${invalid.length} 条草稿的「申请理由」未填写，请补充后再提交`);
+      setTimeout(() => setToastMsg(""), 4000);
+      return;
+    }
+    const result = submitWeekDemands(currentStoreId);
+    if (result.success) {
+      setErrorIds([]);
+      setToastMsg("✅ 本周需求已成功提交至总部采购主管");
+      setTimeout(() => setToastMsg(""), 3000);
+    } else {
+      setErrorIds(result.failedIds);
+      setToastMsg("部分草稿理由为空，已高亮提示");
+      setTimeout(() => setToastMsg(""), 4000);
+    }
   }
 
   if (currentRole === "hq") {
@@ -131,6 +169,25 @@ export default function SubmitDemand() {
 
   return (
     <div className="space-y-6">
+      {toastMsg && (
+        <div className="fixed top-24 right-8 z-50 animate-fade-in-up">
+          <div
+            className={`px-5 py-3 rounded-xl shadow-xl flex items-center gap-2 ${
+              toastMsg.startsWith("✅")
+                ? "bg-accent-600 text-white"
+                : "bg-danger-500 text-white"
+            }`}
+          >
+            {toastMsg.startsWith("✅") ? (
+              <Info className="w-5 h-5" />
+            ) : (
+              <AlertTriangle className="w-5 h-5" />
+            )}
+            <span className="text-sm font-medium">{toastMsg}</span>
+          </div>
+        </div>
+      )}
+
       <div>
         <div className="flex items-start justify-between">
           <div>
@@ -147,15 +204,19 @@ export default function SubmitDemand() {
                 {urgentCount > 0 && (
                   <span className="ml-2 text-danger-600 text-sm">含{urgentCount}急单</span>
                 )}
+                {emptyReasonCount > 0 && (
+                  <span className="ml-2 text-danger-500 text-sm">
+                    {emptyReasonCount} 条理由待填
+                  </span>
+                )}
               </div>
             </div>
             <button
-              onClick={() => {
-                if (!currentStoreId) return;
-                submitWeekDemands(currentStoreId);
-              }}
+              onClick={handleSubmitAll}
               disabled={drafts.length === 0}
-              className="btn-accent"
+              className={`btn-accent ${
+                emptyReasonCount > 0 && drafts.length > 0 ? "ring-2 ring-warn-300" : ""
+              }`}
             >
               <Send className="w-4 h-4" />
               提交全部草稿
@@ -167,13 +228,19 @@ export default function SubmitDemand() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 space-y-6">
           <div className="card p-5">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
               <h2 className="font-serif text-lg font-semibold text-slate-800 flex items-center gap-2">
                 <Package className="w-5 h-5 text-brand-600" />
                 草稿条目（可编辑）
                 {drafts.length > 0 && (
                   <span className="text-xs badge bg-brand-100 text-brand-700 ml-2">
                     {drafts.length} 条待提交
+                  </span>
+                )}
+                {emptyReasonCount > 0 && (
+                  <span className="text-xs badge bg-danger-100 text-danger-600 ml-1 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" />
+                    {emptyReasonCount} 条理由待填
                   </span>
                 )}
               </h2>
@@ -200,15 +267,29 @@ export default function SubmitDemand() {
                       <th className="table-th rounded-l-lg">耗材名称·规格</th>
                       <th className="table-th w-24">数量</th>
                       <th className="table-th w-28">紧急度</th>
-                      <th className="table-th">申请理由</th>
+                      <th className="table-th">
+                        申请理由
+                        <span className="text-danger-500 ml-1">*</span>
+                      </th>
                       <th className="table-th rounded-r-lg w-12"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {drafts.map((d) => {
                       const mat = getMaterialById(d.materialId);
+                      const isEmpty = !d.reason || d.reason.trim().length === 0;
+                      const hasError = errorIds.includes(d.id);
                       return (
-                        <tr key={d.id} className="hover:bg-slate-50/60 transition-colors">
+                        <tr
+                          key={d.id}
+                          className={`transition-colors ${
+                            hasError
+                              ? "bg-danger-50/60"
+                              : isEmpty
+                              ? "bg-warn-50/40 hover:bg-warn-50/70"
+                              : "hover:bg-slate-50/60"
+                          }`}
+                        >
                           <td className="table-td">
                             <div className="font-medium text-slate-800">{mat?.name}</div>
                             <div className="text-xs text-slate-500">{mat?.spec}</div>
@@ -219,9 +300,11 @@ export default function SubmitDemand() {
                                 type="number"
                                 min={1}
                                 value={d.quantity}
-                                onChange={(e) =>
-                                  updateDemand(d.id, { quantity: parseInt(e.target.value) || 1 })
-                                }
+                                onChange={(e) => {
+                                  updateDemand(d.id, {
+                                    quantity: parseInt(e.target.value) || 1,
+                                  });
+                                }}
                                 className="input-sm w-16 text-center"
                               />
                               <span className="text-xs text-slate-500">{mat?.unit}</span>
@@ -241,17 +324,48 @@ export default function SubmitDemand() {
                             </select>
                           </td>
                           <td className="table-td">
-                            <input
-                              type="text"
-                              value={d.reason}
-                              onChange={(e) => updateDemand(d.id, { reason: e.target.value })}
-                              placeholder="如：低库存/新增患者..."
-                              className="input-sm"
-                            />
+                            <div className="relative">
+                              <input
+                                type="text"
+                                value={d.reason}
+                                onChange={(e) => {
+                                  updateDemand(d.id, { reason: e.target.value });
+                                  if (
+                                    errorIds.includes(d.id) &&
+                                    e.target.value.trim().length > 0
+                                  ) {
+                                    setErrorIds((prev) => prev.filter((x) => x !== d.id));
+                                  }
+                                }}
+                                placeholder="如：低库存/新增患者/项目新增..."
+                                className={`input-sm ${
+                                  hasError
+                                    ? "border-danger-400 ring-2 ring-danger-200 focus:ring-danger-300 focus:border-danger-500"
+                                    : isEmpty
+                                    ? "border-warn-400 focus:ring-warn-200"
+                                    : ""
+                                }`}
+                              />
+                              {hasError && (
+                                <div className="flex items-center gap-1 mt-1.5 text-[11px] text-danger-600">
+                                  <AlertCircle className="w-3 h-3" />
+                                  申请理由必填，请说明缺货原因
+                                </div>
+                              )}
+                              {!hasError && isEmpty && (
+                                <div className="flex items-center gap-1 mt-1.5 text-[11px] text-warn-600">
+                                  <AlertTriangle className="w-3 h-3" />
+                                  请填写申请理由（如「库存不足」「新患者增加」）
+                                </div>
+                              )}
+                            </div>
                           </td>
                           <td className="table-td">
                             <button
-                              onClick={() => deleteDemand(d.id)}
+                              onClick={() => {
+                                deleteDemand(d.id);
+                                setErrorIds((prev) => prev.filter((x) => x !== d.id));
+                              }}
                               className="p-2 rounded-lg hover:bg-danger-50 text-slate-400 hover:text-danger-500 transition-colors"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -288,7 +402,9 @@ export default function SubmitDemand() {
                           {mat?.name}
                           <span className="text-xs text-slate-500 ml-2">{mat?.spec}</span>
                         </div>
-                        <div className="text-xs text-slate-500 mt-0.5">{d.reason}</div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          申请理由：{d.reason || "—"}
+                        </div>
                       </div>
                       <div className="text-sm font-bold text-brand-700">
                         {d.quantity}
@@ -312,6 +428,7 @@ export default function SubmitDemand() {
               <h3 className="font-serif text-base font-semibold text-slate-800 flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-warn-500" />
                 常用快捷添加
+                <span className="text-[11px] font-normal text-slate-500">(已填好理由)</span>
               </h3>
               {showTemplates ? (
                 <ChevronUp className="w-4 h-4 text-slate-400" />

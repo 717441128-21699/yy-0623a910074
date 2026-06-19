@@ -36,7 +36,7 @@ interface ProcurementState {
   addDemand: (d: Omit<Demand, "id" | "status" | "week">) => void;
   updateDemand: (id: string, patch: Partial<Demand>) => void;
   deleteDemand: (id: string) => void;
-  submitWeekDemands: (storeId: string) => void;
+  submitWeekDemands: (storeId: string) => { success: boolean; failedIds: string[] };
 
   autoMergeDemands: () => MergedOrder[];
   createMergedOrder: (materialId: string, demandIds: string[]) => void;
@@ -146,21 +146,42 @@ export const useProcurementStore = create<ProcurementState>((set, get) => ({
   },
   submitWeekDemands: (storeId) => {
     const state = get();
+    const weekDrafts = state.demands.filter(
+      (d) =>
+        d.storeId === storeId &&
+        d.week === state.currentWeek &&
+        d.status === "draft"
+    );
+    const invalid = weekDrafts.filter(
+      (d) => !d.reason || d.reason.trim().length === 0
+    );
+    if (invalid.length > 0) {
+      return { success: false, failedIds: invalid.map((d) => d.id) };
+    }
     set({
       demands: state.demands.map((d) =>
-        d.storeId === storeId && d.week === state.currentWeek && d.status === "draft"
+        d.storeId === storeId &&
+        d.week === state.currentWeek &&
+        d.status === "draft"
           ? { ...d, status: "submitted" as const }
           : d
       ),
     });
     persistToFile(get());
+    return { success: true, failedIds: [] };
   },
 
   autoMergeDemands: () => {
     const state = get();
-    const submitted = state.demands.filter((d) => d.status === "submitted" || d.status === "merged");
+    const validSubmitted = state.demands.filter(
+      (d) =>
+        d.status === "submitted" &&
+        !d.mergedOrderId &&
+        d.reason &&
+        d.reason.trim().length > 0
+    );
     const byMaterial = new Map<string, Demand[]>();
-    for (const d of submitted) {
+    for (const d of validSubmitted) {
       if (!byMaterial.has(d.materialId)) byMaterial.set(d.materialId, []);
       byMaterial.get(d.materialId)!.push(d);
     }
@@ -171,10 +192,10 @@ export const useProcurementStore = create<ProcurementState>((set, get) => ({
 
     for (const [matId, demList] of byMaterial) {
       if (demList.length < 2) continue;
-      const existing = state.mergedOrders.find(
+      const hasPendingExisting = state.mergedOrders.some(
         (o) => o.materialId === matId && o.decision === "pending"
       );
-      if (existing) continue;
+      if (hasPendingExisting) continue;
 
       const demandIds = demList.map((d) => d.id);
       const totalQuantity = demList.reduce((s, d) => s + d.quantity, 0);
@@ -188,12 +209,13 @@ export const useProcurementStore = create<ProcurementState>((set, get) => ({
         createDate: today,
       });
 
+      const newOrderId = newOrders[newOrders.length - 1].id;
       for (let i = 0; i < updatedDemands.length; i++) {
         if (demandIds.includes(updatedDemands[i].id)) {
           updatedDemands[i] = {
             ...updatedDemands[i],
             status: "merged",
-            mergedOrderId: newOrders[newOrders.length - 1].id,
+            mergedOrderId: newOrderId,
           };
         }
       }
@@ -260,6 +282,13 @@ export const useProcurementStore = create<ProcurementState>((set, get) => ({
       newDemandStatus = "delivering";
     } else if (decision === "next_week") {
       expectedArrival = addDaysFromNow(7 + (deliveryDays ?? 3));
+      newDemandStatus = "approved";
+    } else if (decision === "hold") {
+      expectedArrival = undefined;
+      newDemandStatus = "approved";
+    } else if (decision === "pending") {
+      expectedArrival = undefined;
+      newDemandStatus = "merged";
     }
 
     set({
@@ -268,7 +297,12 @@ export const useProcurementStore = create<ProcurementState>((set, get) => ({
       ),
       demands: state.demands.map((d) =>
         order.demandIds.includes(d.id)
-          ? { ...d, expectedArrival, status: decision === "hold" ? d.status : newDemandStatus }
+          ? {
+              ...d,
+              expectedArrival,
+              status: newDemandStatus,
+              decision: decision,
+            }
           : d
       ),
     });
@@ -280,7 +314,9 @@ export const useProcurementStore = create<ProcurementState>((set, get) => ({
     set({
       mergedOrders: state.mergedOrders.filter((o) => o.id !== orderId),
       demands: state.demands.map((d) =>
-        d.mergedOrderId === orderId ? { ...d, mergedOrderId: undefined, status: "submitted" } : d
+        d.mergedOrderId === orderId
+          ? { ...d, mergedOrderId: undefined, status: "submitted", decision: undefined, expectedArrival: undefined }
+          : d
       ),
     });
     persistToFile(get());
@@ -292,7 +328,12 @@ export const useProcurementStore = create<ProcurementState>((set, get) => ({
   getUnmergedDemands: () =>
     get().demands.filter((d) => d.status === "submitted" && !d.mergedOrderId),
   getUrgentDemands: () =>
-    get().demands.filter((d) => d.urgency === "urgent" || d.urgency === "critical"),
+    get().demands.filter(
+      (d) =>
+        (d.urgency === "urgent" || d.urgency === "critical") &&
+        d.reason &&
+        d.reason.trim().length > 0
+    ),
 
   getPricesForMaterial: (materialId) => {
     const state = get();
@@ -307,12 +348,16 @@ export const useProcurementStore = create<ProcurementState>((set, get) => ({
   getStats: () => {
     const state = get();
     const weekDemands = state.demands.filter((d) => d.week === state.currentWeek);
-    const total = weekDemands.length;
-    const pending = weekDemands.filter((d) => d.status === "submitted").length;
+    const visibleDemands = weekDemands.filter(
+      (d) =>
+        d.status === "draft" || (d.reason && d.reason.trim().length > 0)
+    );
+    const total = visibleDemands.length;
+    const pending = visibleDemands.filter((d) => d.status === "submitted").length;
     const merged = state.mergedOrders.filter((o) => o.decision === "pending").length;
     const ordered = state.mergedOrders.filter((o) => o.decision === "order_now").length;
     const hold = state.mergedOrders.filter((o) => o.decision === "hold").length;
-    const urgentCount = weekDemands.filter(
+    const urgentCount = visibleDemands.filter(
       (d) => d.urgency === "urgent" || d.urgency === "critical"
     ).length;
     let estimatedCost = 0;
@@ -331,8 +376,12 @@ export const useProcurementStore = create<ProcurementState>((set, get) => ({
 
   getStoreStats: (storeId) => {
     const state = get();
-    const list = state.demands.filter(
+    const allList = state.demands.filter(
       (d) => d.storeId === storeId && d.week === state.currentWeek
+    );
+    const list = allList.filter(
+      (d) =>
+        d.status === "draft" || (d.reason && d.reason.trim().length > 0)
     );
     const total = list.length;
     const urgent = list.filter((d) => d.urgency === "urgent" || d.urgency === "critical").length;

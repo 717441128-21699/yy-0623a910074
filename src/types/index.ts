@@ -34,6 +34,7 @@ export interface Demand {
   status: DemandStatus;
   mergedOrderId?: string;
   expectedArrival?: string;
+  decision?: Decision;
 }
 
 export interface Supplier {
